@@ -332,11 +332,51 @@ class _TestScreenState extends State<TestScreen> {
   }
 
   Future<void> _initGPS() async {
-    final status = await Permission.location.request();
-    if (!status.isGranted) {
-      setState(() => _statusMessage = 'Location permission denied. Cannot run test.');
-      return;
-    }
+  // 1. Force check location services status
+  bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+  if (!serviceEnabled) {
+    setState(() => _statusMessage = 'GPS is turned off. Please enable location services in your phone settings.');
+    return;
+  }
+
+  // 2. Query permissions via permission_handler package
+  var status = await Permission.location.status;
+  
+  if (status.isDenied) {
+    // This triggers the native system pop-up box explicitly on the screen
+    status = await Permission.location.request();
+  }
+
+  if (status.isPermanentlyDenied) {
+    setState(() => _statusMessage = 'Location permission permanently denied. Please enable it from Device Settings.');
+    openAppSettings(); // Automatically opens the phone's settings page for the user
+    return;
+  }
+
+  if (!status.isGranted) {
+    setState(() => _statusMessage = 'Location permission denied. Cannot run test.');
+    return;
+  }
+
+  // 3. Clear to configure tracking stream parameters
+  try {
+    Position pos = await Geolocator.getCurrentPosition(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.best,
+      ),
+    );
+    setState(() {
+      _currentAccuracy = pos.accuracy;
+      if (pos.accuracy <= 15.0) {
+        _statusMessage = 'GPS ready. Accuracy: ${pos.accuracy.toStringAsFixed(1)}m\nPress START when patient is ready.';
+      } else {
+        _statusMessage = 'Weak GPS signal (${pos.accuracy.toStringAsFixed(1)}m). Move to an open outdoor area for better accuracy.';
+      }
+    });
+  } catch (e) {
+    setState(() => _statusMessage = 'GPS processing error: $e');
+  }
+}
 
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
