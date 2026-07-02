@@ -757,7 +757,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       ]);
     }
 
-    String csvString = const ListToCsvConverter().convert(csvData);
+    String csvString = ListToCsvConverter().convert(csvData);
     final directory = await getTemporaryDirectory();
     final String filePath = '${directory.path}/6MWT_Patient_Data.csv';
     final File file = File(filePath);
