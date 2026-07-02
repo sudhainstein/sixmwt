@@ -11,6 +11,7 @@ import 'dart:io';
 import 'package:csv/csv.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
+
 void main() {
   runApp(const SixMWTApp());
 }
@@ -301,7 +302,7 @@ class TestScreen extends StatefulWidget {
 }
 
 class _TestScreenState extends State<TestScreen> {
-  static const int testDuration = 360; // 6 minutes in seconds
+  static const int testDuration = 360;
 
   int _secondsLeft = testDuration;
   double _rawDistance = 0;
@@ -313,8 +314,8 @@ class _TestScreenState extends State<TestScreen> {
   Timer? _countdownTimer;
   StreamSubscription<Position>? _positionSub;
   Position? _lastPosition;
-  List<Position> _positions = [];
-  List<double> _accuracyReadings = [];
+  final List<Position> _positions = [];
+  final List<double> _accuracyReadings = [];
 
   @override
   void initState() {
@@ -332,59 +333,28 @@ class _TestScreenState extends State<TestScreen> {
   }
 
   Future<void> _initGPS() async {
-  // 1. Force check location services status
-  bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-  if (!serviceEnabled) {
-    setState(() => _statusMessage = 'GPS is turned off. Please enable location services in your phone settings.');
-    return;
-  }
-
-  // 2. Query permissions via permission_handler package
-  var status = await Permission.location.status;
-  
-  if (status.isDenied) {
-    // This triggers the native system pop-up box explicitly on the screen
-    status = await Permission.location.request();
-  }
-
-  if (status.isPermanentlyDenied) {
-    setState(() => _statusMessage = 'Location permission permanently denied. Please enable it from Device Settings.');
-    openAppSettings(); // Automatically opens the phone's settings page for the user
-    return;
-  }
-
-  if (!status.isGranted) {
-    setState(() => _statusMessage = 'Location permission denied. Cannot run test.');
-    return;
-  }
-
-  // 3. Clear to configure tracking stream parameters
-  try {
-    Position pos = await Geolocator.getCurrentPosition(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.best,
-      ),
-    );
-    setState(() {
-      _currentAccuracy = pos.accuracy;
-      if (pos.accuracy <= 15.0) {
-        _statusMessage = 'GPS ready. Accuracy: ${pos.accuracy.toStringAsFixed(1)}m\nPress START when patient is ready.';
-      } else {
-        _statusMessage = 'Weak GPS signal (${pos.accuracy.toStringAsFixed(1)}m). Move to an open outdoor area for better accuracy.';
-      }
-    });
-  } catch (e) {
-    setState(() => _statusMessage = 'GPS processing error: $e');
-  }
-}
-
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      setState(() => _statusMessage = 'GPS is off. Please enable location services.');
+      setState(() => _statusMessage = 'GPS is turned off. Please enable location services in your phone settings.');
       return;
     }
 
-    // Check initial GPS accuracy
+    var status = await Permission.location.status;
+    if (status.isDenied) {
+      status = await Permission.location.request();
+    }
+
+    if (status.isPermanentlyDenied) {
+      setState(() => _statusMessage = 'Location permission permanently denied. Please enable it from Device Settings.');
+      openAppSettings();
+      return;
+    }
+
+    if (!status.isGranted) {
+      setState(() => _statusMessage = 'Location permission denied. Cannot run test.');
+      return;
+    }
+
     try {
       Position pos = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
@@ -396,11 +366,11 @@ class _TestScreenState extends State<TestScreen> {
         if (pos.accuracy <= 15.0) {
           _statusMessage = 'GPS ready. Accuracy: ${pos.accuracy.toStringAsFixed(1)}m\nPress START when patient is ready.';
         } else {
-          _statusMessage = 'Weak GPS signal (${pos.accuracy.toStringAsFixed(1)}m). Move to open area for better accuracy. You may still proceed.';
+          _statusMessage = 'Weak GPS signal (${pos.accuracy.toStringAsFixed(1)}m). Move to an open outdoor area for better accuracy.';
         }
       });
     } catch (e) {
-      setState(() => _statusMessage = 'GPS error: $e');
+      setState(() => _statusMessage = 'GPS processing error: $e');
     }
   }
 
@@ -410,38 +380,39 @@ class _TestScreenState extends State<TestScreen> {
       _statusMessage = 'Test running...';
     });
 
-    // Start countdown
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      setState(() => _secondsLeft--);
-      if (_secondsLeft <= 0) {
-        _stopTest();
-      }
+      setState(() {
+        _secondsLeft--;
+        if (_secondsLeft <= 0) {
+          _stopTest();
+        }
+      });
     });
 
-    // Start GPS stream
     _positionSub = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
         accuracy: LocationAccuracy.best,
         distanceFilter: 2,
       ),
     ).listen((Position pos) {
-      setState(() => _currentAccuracy = pos.accuracy);
-      _accuracyReadings.add(pos.accuracy);
+      setState(() {
+        _currentAccuracy = pos.accuracy;
+        _accuracyReadings.add(pos.accuracy);
 
-      if (_lastPosition != null) {
-        double segment = Geolocator.distanceBetween(
-          _lastPosition!.latitude,
-          _lastPosition!.longitude,
-          pos.latitude,
-          pos.longitude,
-        );
-        // Filter implausible GPS jumps (>20m per sample = impossible walking)
-        if (segment < 20.0) {
-          setState(() => _rawDistance += segment);
+        if (_lastPosition != null) {
+          double segment = Geolocator.distanceBetween(
+            _lastPosition!.latitude,
+            _lastPosition!.longitude,
+            pos.latitude,
+            pos.longitude,
+          );
+          if (segment < 20.0) {
+            _rawDistance += segment;
+          }
         }
-      }
-      _lastPosition = pos;
-      _positions.add(pos);
+        _lastPosition = pos;
+        _positions.add(pos);
+      });
     });
   }
 
@@ -454,30 +425,21 @@ class _TestScreenState extends State<TestScreen> {
         ? 0.0
         : _accuracyReadings.reduce((a, b) => a + b) / _accuracyReadings.length;
 
-    // Stienen velocity correction
     double corrected = _rawDistance;
     if (avgSpeed < 3.5) {
       final deficit = 3.5 - avgSpeed;
       corrected = _rawDistance * (1 + deficit * 0.02);
     }
 
-    // Enright & Sherrill predicted distance
     double predicted;
     if (widget.sex == 'Male') {
-      predicted = (7.57 * widget.height) -
-          (5.02 * widget.age) -
-          (1.76 * widget.weight) -
-          309;
+      predicted = (7.57 * widget.height) - (5.02 * widget.age) - (1.76 * widget.weight) - 309;
     } else {
-      predicted = (2.11 * widget.height) -
-          (2.29 * widget.weight) -
-          (5.78 * widget.age) +
-          667;
+      predicted = (2.11 * widget.height) - (2.29 * widget.weight) - (5.78 * widget.age) + 667;
     }
     predicted = predicted.clamp(100, 1000);
     final percentPredicted = (corrected / predicted) * 100;
 
-    // Save to DB
     final gpsJson = jsonEncode(_positions
         .map((p) => {
               'lat': p.latitude,
@@ -570,8 +532,7 @@ class _TestScreenState extends State<TestScreen> {
                       color: _secondsLeft < 30 ? Colors.red : Colors.blue,
                     ),
                   ),
-                  const Text('Time Remaining',
-                      style: TextStyle(color: Colors.grey)),
+                  const Text('Time Remaining', style: TextStyle(color: Colors.grey)),
                 ],
               ),
             ),
@@ -586,8 +547,7 @@ class _TestScreenState extends State<TestScreen> {
                 children: [
                   Text(
                     '${_rawDistance.toStringAsFixed(1)} m',
-                    style: const TextStyle(
-                        fontSize: 40, fontWeight: FontWeight.bold),
+                    style: const TextStyle(fontSize: 40, fontWeight: FontWeight.bold),
                   ),
                   const Text('Distance', style: TextStyle(color: Colors.grey)),
                 ],
@@ -610,15 +570,13 @@ class _TestScreenState extends State<TestScreen> {
             const SizedBox(height: 32),
             if (!_testStarted)
               ElevatedButton(
-                onPressed: _startTest,
+                onPressed: (_statusMessage.contains('denied') || _statusMessage.contains('off')) ? null : _startTest,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.green,
+                  backgroundColor: (_statusMessage.contains('denied') || _statusMessage.contains('off')) ? Colors.grey : Colors.green,
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(vertical: 20),
                 ),
-                child: const Text('START TEST',
-                    style:
-                        TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                child: const Text('START TEST', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
               ),
             if (_testStarted && !_testDone)
               ElevatedButton(
@@ -628,9 +586,7 @@ class _TestScreenState extends State<TestScreen> {
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(vertical: 20),
                 ),
-                child: const Text('STOP EARLY',
-                    style:
-                        TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                child: const Text('STOP EARLY', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
               ),
           ],
         ),
@@ -675,37 +631,26 @@ class ResultsScreen extends StatelessWidget {
           children: [
             _resultCard('Patient', testData['name'], Icons.person),
             _resultCard('Date', testData['date_time'], Icons.calendar_today),
-            _resultCard('Raw Distance',
-                '${(testData['raw_distance'] as double).toStringAsFixed(1)} m', Icons.straighten),
-            _resultCard('Corrected Distance',
-                '${corrected.toStringAsFixed(1)} m', Icons.straighten),
-            _resultCard('Predicted Normal',
-                '${predicted.toStringAsFixed(1)} m', Icons.trending_up),
-            _resultCard('% Predicted',
-                '${percent.toStringAsFixed(1)}%', Icons.percent,
+            _resultCard('Raw Distance', '${(testData['raw_distance'] as double).toStringAsFixed(1)} m', Icons.straighten),
+            _resultCard('Corrected Distance', '${corrected.toStringAsFixed(1)} m', Icons.straighten),
+            _resultCard('Predicted Normal', '${predicted.toStringAsFixed(1)} m', Icons.trending_up),
+            _resultCard('% Predicted', '${percent.toStringAsFixed(1)}%', Icons.percent,
                 color: percent < 70
                     ? Colors.red.shade50
                     : percent < 85
                         ? Colors.orange.shade50
                         : Colors.green.shade50),
-            _resultCard('Avg Speed',
-                '${avgSpeed.toStringAsFixed(2)} km/h', Icons.speed),
-            _resultCard('Avg GPS Accuracy',
-                '${avgAccuracy.toStringAsFixed(1)} m', Icons.gps_fixed),
+            _resultCard('Avg Speed', '${avgSpeed.toStringAsFixed(2)} km/h', Icons.speed),
+            _resultCard('Avg GPS Accuracy', '${avgAccuracy.toStringAsFixed(1)} m', Icons.gps_fixed),
             if (slowWarning)
-              _warningCard(
-                  '⚠️ Speed Warning',
-                  'Average speed was below 2 km/h. GPS accuracy is reduced at slow speeds. Result may be underestimated.'),
+              _warningCard('⚠️ Speed Warning', 'Average speed was below 2 km/h. GPS accuracy is reduced at slow speeds. Result may be underestimated.'),
             if (accuracyWarning)
-              _warningCard(
-                  '⚠️ GPS Warning',
-                  'Average GPS accuracy was ${avgAccuracy.toStringAsFixed(1)}m. Results may be less reliable. Recommend open outdoor environment.'),
+              _warningCard('⚠️ GPS Warning', 'Average GPS accuracy was ${avgAccuracy.toStringAsFixed(1)}m. Results may be less reliable. Recommend open outdoor environment.'),
             const SizedBox(height: 16),
             ElevatedButton(
               onPressed: () => Navigator.pushAndRemoveUntil(
                 context,
-                MaterialPageRoute(
-                    builder: (_) => const PatientIntakeScreen()),
+                MaterialPageRoute(builder: (_) => const PatientIntakeScreen()),
                 (route) => false,
               ),
               style: ElevatedButton.styleFrom(
@@ -713,13 +658,11 @@ class ResultsScreen extends StatelessWidget {
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 16),
               ),
-              child: const Text('NEW TEST',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              child: const Text('NEW TEST', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
             ),
             const SizedBox(height: 8),
             OutlinedButton(
-              onPressed: () => Navigator.push(context,
-                  MaterialPageRoute(builder: (_) => const HistoryScreen())),
+              onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const HistoryScreen())),
               child: const Text('VIEW ALL TESTS'),
             ),
           ],
@@ -728,17 +671,14 @@ class ResultsScreen extends StatelessWidget {
     );
   }
 
-  Widget _resultCard(String label, String value, IconData icon,
-      {Color? color}) {
+  Widget _resultCard(String label, String value, IconData icon, {Color? color}) {
     return Card(
       color: color,
       margin: const EdgeInsets.only(bottom: 8),
       child: ListTile(
         leading: Icon(icon, color: Colors.blue),
         title: Text(label, style: const TextStyle(color: Colors.grey, fontSize: 13)),
-        subtitle: Text(value,
-            style: const TextStyle(
-                fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87)),
+        subtitle: Text(value, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87)),
       ),
     );
   }
@@ -752,8 +692,7 @@ class ResultsScreen extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(title,
-                style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.orange)),
+            Text(title, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.orange)),
             const SizedBox(height: 4),
             Text(message, style: const TextStyle(fontSize: 13)),
           ],
@@ -774,7 +713,6 @@ class HistoryScreen extends StatefulWidget {
 class _HistoryScreenState extends State<HistoryScreen> {
   List<Map<String, dynamic>> _tests = [];
 
-  // === PASTE THIS NEW FUNCTION HERE ===
   Future<void> exportTestsToCSV() async {
     final List<Map<String, dynamic>> rows = await DatabaseHelper.getAllTests();
     if (rows.isEmpty) return;
@@ -805,7 +743,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
     await Share.shareXFiles([XFile(filePath)], text: '6MWT Exported Patient Records');
   }
-  // === END OF NEW FUNCTION ===
 
   @override
   void initState() {
@@ -825,7 +762,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
         title: const Text('Past Tests'),
         backgroundColor: Colors.blue,
         foregroundColor: Colors.white,
-        // === PASTE THIS ACTIONS BLOCK HERE ===
         actions: [
           IconButton(
             icon: const Icon(Icons.download),
@@ -835,7 +771,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
             },
           ),
         ],
-        // === END OF ACTIONS BLOCK ===
       ),
       body: _tests.isEmpty
           ? const Center(child: Text('No tests recorded yet.'))
@@ -847,17 +782,15 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 return Card(
                   margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   child: ListTile(
-                    title: Text(t['name'],
-                        style: const TextStyle(fontWeight: FontWeight.bold)),
+                    title: Text(t['name'], style: const TextStyle(fontWeight: FontWeight.bold)),
                     subtitle: Text(
                         '${t['date_time']} • ${t['indication']}\n'
                         'Distance: ${(t['corrected_distance'] as double).toStringAsFixed(1)}m • $pct% predicted'),
                     isThreeLine: true,
                     leading: CircleAvatar(
-                      backgroundColor:
-                          double.parse(pct) < 70 ? Colors.red : Colors.green,
+                      backgroundColor: double.parse(pct) < 70 ? Colors.red : Colors.green,
                       child: Text(
-                        '${pct}%',
+                        '$pct%',
                         style: const TextStyle(color: Colors.white, fontSize: 10),
                       ),
                     ),
