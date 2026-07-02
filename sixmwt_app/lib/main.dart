@@ -7,7 +7,10 @@ import 'package:path/path.dart' as path;
 import 'package:intl/intl.dart';
 import 'dart:async';
 import 'dart:convert';
-
+import 'dart:io';
+import 'package:csv/csv.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:path_provider/path_provider.dart';
 void main() {
   runApp(const SixMWTApp());
 }
@@ -731,6 +734,39 @@ class HistoryScreen extends StatefulWidget {
 class _HistoryScreenState extends State<HistoryScreen> {
   List<Map<String, dynamic>> _tests = [];
 
+  // === PASTE THIS NEW FUNCTION HERE ===
+  Future<void> exportTestsToCSV() async {
+    final List<Map<String, dynamic>> rows = await DatabaseHelper.getAllTests();
+    if (rows.isEmpty) return;
+
+    List<List<dynamic>> csvData = [
+      [
+        'Test ID', 'Patient Name', 'Patient ID', 'Age', 'Sex', 'Height (cm)', 
+        'Weight (kg)', 'Referred By', 'Indication', 'Date Time', 
+        'Raw Distance (m)', 'Corrected Distance (m)', 'Predicted Normal (m)', 
+        '% Predicted', 'Avg Speed (km/h)', 'Avg Accuracy (m)'
+      ]
+    ];
+
+    for (var row in rows) {
+      csvData.add([
+        row['id'], row['name'], row['patient_id'], row['age'], row['sex'],
+        row['height'], row['weight'], row['referred_by'], row['indication'],
+        row['date_time'], row['raw_distance'], row['corrected_distance'],
+        row['predicted'], row['percent_predicted'], row['avg_speed'], row['avg_accuracy'],
+      ]);
+    }
+
+    String csvString = const ListToCsvConverter().convert(csvData);
+    final directory = await getTemporaryDirectory();
+    final String filePath = '${directory.path}/6MWT_Patient_Data.csv';
+    final File file = File(filePath);
+    await file.writeAsString(csvString);
+
+    await Share.shareXFiles([XFile(filePath)], text: '6MWT Exported Patient Records');
+  }
+  // === END OF NEW FUNCTION ===
+
   @override
   void initState() {
     super.initState();
@@ -749,6 +785,17 @@ class _HistoryScreenState extends State<HistoryScreen> {
         title: const Text('Past Tests'),
         backgroundColor: Colors.blue,
         foregroundColor: Colors.white,
+        // === PASTE THIS ACTIONS BLOCK HERE ===
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.download),
+            tooltip: 'Export data to Excel/CSV',
+            onPressed: () async {
+              await exportTestsToCSV();
+            },
+          ),
+        ],
+        // === END OF ACTIONS BLOCK ===
       ),
       body: _tests.isEmpty
           ? const Center(child: Text('No tests recorded yet.'))
