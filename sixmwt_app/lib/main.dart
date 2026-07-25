@@ -571,7 +571,7 @@ class _TestScreenState extends State<TestScreen> {
             if (!_testStarted)
               ElevatedButton(
                 onPressed: (_statusMessage.contains('denied') || _statusMessage.contains('off')) ? null : _startTest,
-                style: ElevatedButton.styleFrom(
+                  style: ElevatedButton.styleFrom(
                   backgroundColor: (_statusMessage.contains('denied') || _statusMessage.contains('off')) ? Colors.grey : Colors.green,
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(vertical: 20),
