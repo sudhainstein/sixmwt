@@ -43,6 +43,10 @@ dependencies:
   path: ^1.9.1
   csv: ^6.0.0
   share_plus: any
+  camera: ^0.11.0+2
+  audioplayers: ^6.0.0
+
+  
 dev_dependencies:
   flutter_test:
     sdk: flutter
