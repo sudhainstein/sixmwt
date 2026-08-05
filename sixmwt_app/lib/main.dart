@@ -747,7 +747,6 @@ class _GaitVideoScreenState extends State<GaitVideoScreen> {
       final cleanID = widget.patientId.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
       final timeStr = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
       
-      // File naming convention: Gait_[PatientID]_[PatientName]_[Timestamp].mp4
       final String newPath = path.join(appDir.path, 'Gait_${cleanID}_${cleanName}_$timeStr.mp4');
 
       await File(videoFile.path).copy(newPath);
@@ -924,7 +923,7 @@ class ResultsScreen extends StatelessWidget {
   }
 }
 
-// ─── HISTORY SCREEN ──────────────────────────────────────────────────────────
+// ─── HISTORY SCREEN (WITH DIRECT VIDEO SHARE & EXPORT) ────────────────────────
 
 class HistoryScreen extends StatefulWidget {
   const HistoryScreen({super.key});
@@ -967,6 +966,22 @@ class _HistoryScreenState extends State<HistoryScreen> {
     await Share.shareXFiles([XFile(filePath)], text: 'Exported Clinical Patient Records & Gait Logs');
   }
 
+  Future<void> _shareVideo(String videoPath) async {
+    final file = File(videoPath);
+    if (await file.exists()) {
+      await Share.shareXFiles(
+        [XFile(videoPath)],
+        text: 'Sharing Gait Video Capture',
+      );
+    } else {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Video file not found on local storage.')),
+        );
+      }
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -1001,6 +1016,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 final t = _tests[i];
                 final isVideo = (t['mode'] ?? '') == 'Gait Video';
                 final pct = ((t['percent_predicted'] ?? 0.0) as double).toStringAsFixed(1);
+                final videoPath = t['video_path'] as String?;
+
                 return Card(
                   margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   child: ListTile(
@@ -1011,9 +1028,16 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     title: Text('${t['name']} (ID: ${t['patient_id']})', style: const TextStyle(fontWeight: FontWeight.bold)),
                     subtitle: Text(
                       isVideo
-                          ? 'Mode: Gait Video | Date: ${t['date_time']}\nSaved File: ${t['video_path'] != null ? path.basename(t['video_path']) : 'N/A'}'
+                          ? 'Mode: Gait Video | Date: ${t['date_time']}\nFile: ${videoPath != null ? path.basename(videoPath) : 'N/A'}'
                           : 'Mode: 6MWT | Date: ${t['date_time']}\nDist: ${(t['corrected_distance'] as double).toStringAsFixed(1)}m ($pct% predicted)',
                     ),
+                    trailing: isVideo && videoPath != null
+                        ? IconButton(
+                            icon: const Icon(Icons.share, color: Colors.purple),
+                            tooltip: 'Share/Export Video',
+                            onPressed: () => _shareVideo(videoPath),
+                          )
+                        : null,
                     isThreeLine: true,
                   ),
                 );
