@@ -487,15 +487,15 @@ class _TestScreenState extends State<TestScreen> {
     });
 
     late LocationSettings locationSettings;
+    // ─── REPLACE WITH THIS ───────────────────────────────────────────────────────
     if (defaultTargetPlatform == TargetPlatform.android) {
       locationSettings = AndroidSettings(
         accuracy: LocationAccuracy.bestForNavigation,
         distanceFilter: 0,
         intervalDuration: const Duration(milliseconds: 1000),
-        fastestInterval: const Duration(milliseconds: 500),
         foregroundNotificationConfig: const ForegroundNotificationConfig(
-          notificationText: "6MWT active: Recording trajectory and gait data",
           notificationTitle: "6MWT Session Running",
+          notificationText: "6MWT active: Recording trajectory and gait data",
           enableWakeLock: true,
         ),
       );
