@@ -1,6 +1,8 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:geolocator_android/geolocator_android.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as path;
@@ -55,40 +57,45 @@ class DatabaseHelper {
   static Future<Database> _initDB() async {
     final dbPath = await getDatabasesPath();
     final fullPath = path.join(dbPath, 'sixmwt.db');
-    return openDatabase(fullPath, version: 2, onCreate: (db, version) async {
-      await db.execute('''
-        CREATE TABLE tests (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          mode TEXT,
-          name TEXT,
-          patient_id TEXT,
-          age INTEGER,
-          sex TEXT,
-          height REAL,
-          weight REAL,
-          referred_by TEXT,
-          indication TEXT,
-          date_time TEXT,
-          start_latitude REAL,
-          start_longitude REAL,
-          raw_distance REAL,
-          corrected_distance REAL,
-          predicted REAL,
-          percent_predicted REAL,
-          avg_speed REAL,
-          avg_accuracy REAL,
-          gps_points TEXT,
-          video_path TEXT
-        )
-      ''');
-    }, onUpgrade: (db, oldVersion, newVersion) async {
-      if (oldVersion < 2) {
-        await db.execute('ALTER TABLE tests ADD COLUMN mode TEXT');
-        await db.execute('ALTER TABLE tests ADD COLUMN start_latitude REAL');
-        await db.execute('ALTER TABLE tests ADD COLUMN start_longitude REAL');
-        await db.execute('ALTER TABLE tests ADD COLUMN video_path TEXT');
-      }
-    });
+    return openDatabase(
+      fullPath,
+      version: 2,
+      onCreate: (db, version) async {
+        await db.execute('''
+          CREATE TABLE tests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mode TEXT,
+            name TEXT,
+            patient_id TEXT,
+            age INTEGER,
+            sex TEXT,
+            height REAL,
+            weight REAL,
+            referred_by TEXT,
+            indication TEXT,
+            date_time TEXT,
+            start_latitude REAL,
+            start_longitude REAL,
+            raw_distance REAL,
+            corrected_distance REAL,
+            predicted REAL,
+            percent_predicted REAL,
+            avg_speed REAL,
+            avg_accuracy REAL,
+            gps_points TEXT,
+            video_path TEXT
+          )
+        ''');
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await db.execute('ALTER TABLE tests ADD COLUMN mode TEXT');
+          await db.execute('ALTER TABLE tests ADD COLUMN start_latitude REAL');
+          await db.execute('ALTER TABLE tests ADD COLUMN start_longitude REAL');
+          await db.execute('ALTER TABLE tests ADD COLUMN video_path TEXT');
+        }
+      },
+    );
   }
 
   static Future<int> insertTest(Map<String, dynamic> data) async {
@@ -118,10 +125,10 @@ class _PatientIntakeScreenState extends State<PatientIntakeScreen> {
   final _heightCtrl = TextEditingController();
   final _weightCtrl = TextEditingController();
   final _referredCtrl = TextEditingController();
-  
+
   String _sex = 'Male';
   String _indication = 'Spine';
-  
+
   double? _startLat;
   double? _startLng;
   String _locationStatus = 'Fetching initial GPS coordinates...';
@@ -146,13 +153,18 @@ class _PatientIntakeScreenState extends State<PatientIntakeScreen> {
       if (status.isDenied) status = await Permission.location.request();
 
       if (status.isGranted) {
+        // High-precision intake fix
         Position pos = await Geolocator.getCurrentPosition(
-          locationSettings: const LocationSettings(accuracy: LocationAccuracy.medium),
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.best,
+            timeLimit: Duration(seconds: 10),
+          ),
         );
         setState(() {
           _startLat = pos.latitude;
           _startLng = pos.longitude;
-          _locationStatus = 'Lat: ${pos.latitude.toStringAsFixed(5)}, Lng: ${pos.longitude.toStringAsFixed(5)}';
+          _locationStatus =
+              'Lat: ${pos.latitude.toStringAsFixed(5)}, Lng: ${pos.longitude.toStringAsFixed(5)} (±${pos.accuracy.toStringAsFixed(1)}m)';
         });
       } else {
         setState(() => _locationStatus = 'Location Permission Denied');
@@ -386,6 +398,13 @@ class TestScreen extends StatefulWidget {
 class _TestScreenState extends State<TestScreen> {
   static const int testDuration = 360; // 6 Minutes
 
+  // Dynamic Clinical Noise Gate Thresholds
+  static const double maxAcceptableAccuracyMeters = 10.0;
+  static const double minSegmentDistanceMeters = 0.5;   // 0.5m floor protects slow gait
+  static const double minWalkingSpeedMps = 0.15;         // 0.15 m/s human crawling baseline
+  static const double maxSegmentDistanceMeters = 7.0;   // 7.0m hard displacement cap
+  static const double maxWalkingSpeedMps = 3.5;          // 3.5 m/s maximum clinical human speed
+
   int _secondsLeft = testDuration;
   double _rawDistance = 0;
   double _currentAccuracy = 0;
@@ -395,7 +414,7 @@ class _TestScreenState extends State<TestScreen> {
 
   Timer? _countdownTimer;
   StreamSubscription<Position>? _positionSub;
-  Position? _lastPosition;
+  Position? _lastAcceptedPosition;
   final List<Position> _positions = [];
   final List<double> _accuracyReadings = [];
   final AudioPlayer _audioPlayer = AudioPlayer();
@@ -467,26 +486,70 @@ class _TestScreenState extends State<TestScreen> {
       });
     });
 
+    late LocationSettings locationSettings;
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      locationSettings = AndroidSettings(
+        accuracy: LocationAccuracy.bestForNavigation,
+        distanceFilter: 0,
+        intervalDuration: const Duration(milliseconds: 1000),
+        fastestInterval: const Duration(milliseconds: 500),
+        foregroundNotificationConfig: const ForegroundNotificationConfig(
+          notificationText: "6MWT active: Recording trajectory and gait data",
+          notificationTitle: "6MWT Session Running",
+          enableWakeLock: true,
+        ),
+      );
+    } else {
+      locationSettings = const LocationSettings(
+        accuracy: LocationAccuracy.bestForNavigation,
+        distanceFilter: 0,
+      );
+    }
+
     _positionSub = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(accuracy: LocationAccuracy.best, distanceFilter: 2),
+      locationSettings: locationSettings,
     ).listen((Position pos) {
       setState(() {
         _currentAccuracy = pos.accuracy;
         _accuracyReadings.add(pos.accuracy);
 
-        if (_lastPosition != null) {
-          double segment = Geolocator.distanceBetween(
-            _lastPosition!.latitude,
-            _lastPosition!.longitude,
-            pos.latitude,
-            pos.longitude,
-          );
-          if (segment < 20.0) {
-            _rawDistance += segment;
-          }
+        // Gate 1: Reject horizontal accuracy uncertainty > 10.0m
+        if (pos.accuracy > maxAcceptableAccuracyMeters) {
+          return;
         }
-        _lastPosition = pos;
-        _positions.add(pos);
+
+        // Establish initial coordinate anchor
+        if (_lastAcceptedPosition == null) {
+          _lastAcceptedPosition = pos;
+          _positions.add(pos);
+          return;
+        }
+
+        final double segment = Geolocator.distanceBetween(
+          _lastAcceptedPosition!.latitude,
+          _lastAcceptedPosition!.longitude,
+          pos.latitude,
+          pos.longitude,
+        );
+
+        final double dt = pos.timestamp.difference(_lastAcceptedPosition!.timestamp).inMilliseconds / 1000.0;
+        if (dt <= 0) return;
+
+        final double calculatedSpeed = segment / dt;
+
+        // Gate 2: Reject non-human speed spikes and multipath jumps
+        if (segment > maxSegmentDistanceMeters || calculatedSpeed > maxWalkingSpeedMps) {
+          return;
+        }
+
+        // Gate 3: Suppress stationary drift while allowing slow gait accumulation
+        final double effectiveSpeed = pos.speed >= 0 ? pos.speed : calculatedSpeed;
+
+        if (segment >= minSegmentDistanceMeters && effectiveSpeed >= minWalkingSpeedMps) {
+          _rawDistance += segment;
+          _lastAcceptedPosition = pos;
+          _positions.add(pos);
+        }
       });
     });
   }
@@ -518,7 +581,12 @@ class _TestScreenState extends State<TestScreen> {
     final percentPredicted = (corrected / predicted) * 100;
 
     final gpsJson = jsonEncode(_positions
-        .map((p) => {'lat': p.latitude, 'lng': p.longitude, 'acc': p.accuracy, 'ts': p.timestamp.toIso8601String()})
+        .map((p) => {
+              'lat': p.latitude,
+              'lng': p.longitude,
+              'acc': p.accuracy,
+              'ts': p.timestamp.toIso8601String()
+            })
         .toList());
 
     final testData = {
@@ -746,7 +814,7 @@ class _GaitVideoScreenState extends State<GaitVideoScreen> {
       final cleanName = widget.name.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
       final cleanID = widget.patientId.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
       final timeStr = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
-      
+
       final String newPath = path.join(appDir.path, 'Gait_${cleanID}_${cleanName}_$timeStr.mp4');
 
       await File(videoFile.path).copy(newPath);
